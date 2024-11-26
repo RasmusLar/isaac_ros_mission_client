@@ -20,10 +20,12 @@
 import json
 import socket
 import time
+import ssl
 
 from isaac_ros_mqtt_bridge.MqttBridgeUtils import convert_dict_keys
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 import rclpy
 from rclpy.node import Node
 
@@ -47,11 +49,16 @@ class RosToMqttNode(Node):
             parameters=[
                 ("interface_name", "uagv"),
                 ("major_version", "v2"),
+                ("minor_version", "0"),
                 ("manufacturer", "RobotCompany"),
                 ("serial_number", "carter01"),
+                ("map_name", ""),
                 ("mqtt_client_name", "RosToMqttBridge"),
                 ("mqtt_host_name", "localhost"),
                 ("mqtt_port", 1883),
+                ("mqtt_username", ""),
+                ("mqtt_password", ""),
+                ("use_tls", False),
                 ("mqtt_transport", "tcp"),
                 ("mqtt_ws_path", ""),
                 ("mqtt_keep_alive", 60),
@@ -64,8 +71,10 @@ class RosToMqttNode(Node):
             ],
         )
 
+        client_name = self.get_parameter("mqtt_client_name").value
         self.mqtt_client = mqtt.Client(
-            self.get_parameter("mqtt_client_name").value,
+            callback_api_version=CallbackAPIVersion.VERSION2,
+            client_id=client_name,
             transport=self.get_parameter("mqtt_transport").value,
         )
 
@@ -79,14 +88,34 @@ class RosToMqttNode(Node):
 
         self.interface_name = self.get_parameter("interface_name").value
         self.major_version = self.get_parameter("major_version").value
+        if self.major_version.startswith("v"):
+            self.version_string = f'{self.major_version.replace("v", "")}.{self.get_parameter("minor_version").value}.0'
+        else:
+            self.version_string = (
+                f'{self.major_version}.{self.get_parameter("minor_version").value}.0'
+            )
         self.manufacturer = self.get_parameter("manufacturer").value
         self.serial_number = self.get_parameter("serial_number").value
+        self.map_name = self.get_parameter("map_name").value
+        self.username = self.get_parameter("mqtt_username").value
+        self.password = self.get_parameter("mqtt_password").value
+        self.use_tls = self.get_parameter("use_tls").value
+
+        if not (self.username == "" and self.password == ""):
+            self.mqtt_client.username_pw_set(self.username, self.password)
+
+        if self.use_tls:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+            self.mqtt_client.tls_set_context(context)
+
         self.mqtt_topic_prefix = f"{self.interface_name}/{self.major_version}/{self.manufacturer}/{self.serial_number}"
 
-        def on_mqtt_connect(client, userdata, flags, rc):
-            self.get_logger().info(f"Connected with result code {str(rc)}")
+        def on_mqtt_connect(client, userdata, connect_flags, rc, properties):
+            self.get_logger().info(
+                f"Connected {client_name} with result code {str(rc)}"
+            )
 
-        def on_mqtt_disconnect(client, userdata, rc):
+        def on_mqtt_disconnect(client, userdata, connect_flags, rc, properties):
             if rc != 0:
                 self.get_logger().info(f"Disconnected with result code {str(rc)}")
 
@@ -142,12 +171,25 @@ class RosToMqttNode(Node):
     def __ros_subscriber_callback(self, msg):
         try:
             extracted = message_conversion.extract_values(msg)
+            if extracted["manufacturer"] == "":
+                extracted["manufacturer"] = self.manufacturer
+            if extracted["serial_number"] == "":
+                extracted["serial_number"] = self.serial_number
+            if extracted["version"] == "":
+                extracted["version"] = self.version_string
+            if (
+                self.map_name != ""
+                and extracted["agv_position"]["map_id"] != self.map_name
+            ):
+                extracted["agv_position"]["map_id"] = self.map_name
+
             if self.get_parameter("convert_snake_to_camel").value:
                 self.mqtt_client.publish(
                     f"{self.mqtt_topic_prefix}/state",
                     json.dumps(convert_dict_keys(extracted, "snake_to_dromedary")),
                 )
             else:
+                self.get_logger().debug("{}".format(extracted))
                 self.mqtt_client.publish(
                     f"{self.mqtt_topic_prefix}/state", json.dumps(extracted)
                 )
