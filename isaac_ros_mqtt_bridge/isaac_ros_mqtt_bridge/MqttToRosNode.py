@@ -25,6 +25,7 @@ import isaac_ros_mqtt_bridge.MqttBridgeUtils as utils
 from isaac_ros_mqtt_bridge.MqttBridgeUtils import convert_dict_keys
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 import rclpy
 from rclpy.node import Node
 from rosbridge_library.internal import message_conversion
@@ -53,6 +54,9 @@ class MqttToRosNode(Node):
                 ("mqtt_client_name", "MqttBridge"),
                 ("mqtt_host_name", "localhost"),
                 ("mqtt_port", 1883),
+                ("mqtt_username", ""),
+                ("mqtt_password", ""),
+                ("use_tls", False),
                 ("mqtt_transport", "tcp"),
                 ("mqtt_ws_path", ""),
                 ("mqtt_keep_alive", 60),
@@ -65,8 +69,10 @@ class MqttToRosNode(Node):
             ],
         )
 
+        client_name = self.get_parameter("mqtt_client_name").value
         self.mqtt_client = mqtt.Client(
-            self.get_parameter("mqtt_client_name").value,
+            callback_api_version=CallbackAPIVersion.VERSION2,
+            client_id=client_name,
             transport=self.get_parameter("mqtt_transport").value,
         )
 
@@ -82,10 +88,23 @@ class MqttToRosNode(Node):
         self.major_version = self.get_parameter("major_version").value
         self.manufacturer = self.get_parameter("manufacturer").value
         self.serial_number = self.get_parameter("serial_number").value
+        self.username = self.get_parameter("mqtt_username").value
+        self.password = self.get_parameter("mqtt_password").value
+        self.use_tls = self.get_parameter("use_tls").value
+
+        if not (self.username == "" and self.password == ""):
+            self.mqtt_client.username_pw_set(self.username, self.password)
+
+        if self.use_tls:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+            self.mqtt_client.tls_set_context(context)
+
         self.mqtt_topic_prefix = f"{self.interface_name}/{self.major_version}/{self.manufacturer}/{self.serial_number}"
 
-        def on_mqtt_connect(client, userdata, flags, rc):
-            self.get_logger().info(f"Connected with result code {str(rc)}")
+        def on_mqtt_connect(client, userdata, connect_flags, rc, properties):
+            self.get_logger().info(
+                f"Connected {client_name} with result code {str(rc)}"
+            )
             self.mqtt_client.subscribe(f"{self.mqtt_topic_prefix}/order")
             self.mqtt_client.subscribe(f"{self.mqtt_topic_prefix}/instantActions")
             connection_message = utils.ConnectionMessage(
@@ -98,10 +117,15 @@ class MqttToRosNode(Node):
                 qos=1,
                 retain=True,
             )
+            self.get_logger().info(
+                f"Published message on topic {self.mqtt_topic_prefix}"
+            )
 
-        def on_mqtt_disconnect(client, userdata, rc):
+        def on_mqtt_disconnect(client, userdata, connect_flags, rc, properties):
             if rc != 0:
                 self.get_logger().info(f"Disconnected with result code {str(rc)}")
+                self.get_logger().error(f"Disconnect flags: {connect_flags}")
+                self.get_logger().error(f"Properties: {properties}")
 
         self.mqtt_client.on_connect = on_mqtt_connect
         self.mqtt_client.on_disconnect = on_mqtt_disconnect
@@ -116,6 +140,7 @@ class MqttToRosNode(Node):
                     )
                     publisher = self.publisher
                 if msg.topic.endswith("instantActions"):
+                    self.get_logger().info(f"From {msg.topic}: {str(msg.payload)}")
                     ros_msg = ros_loader.get_message_instance(
                         "vda5050_msgs/InstantActions"
                     )
@@ -145,35 +170,39 @@ class MqttToRosNode(Node):
                 self.error_publisher.publish(error_msg)
 
         self.mqtt_client.on_message = on_mqtt_message
+        try:
+            self.publisher = self.create_publisher(
+                ros_loader.get_message_class(
+                    self.get_parameter("ros_publisher_type").value
+                ),
+                "bridge_pub_topic",
+                self.get_parameter("ros_publisher_queue").value,
+            )
 
-        self.publisher = self.create_publisher(
-            ros_loader.get_message_class(
-                self.get_parameter("ros_publisher_type").value
-            ),
-            "bridge_pub_topic",
-            self.get_parameter("ros_publisher_queue").value,
-        )
+            self.instant_actions_publisher = self.create_publisher(
+                ros_loader.get_message_class("vda5050_msgs/InstantActions"),
+                "instant_actions_commands",
+                self.get_parameter("ros_publisher_queue").value,
+            )
 
-        self.instant_actions_publisher = self.create_publisher(
-            ros_loader.get_message_class("vda5050_msgs/InstantActions"),
-            "instant_actions_commands",
-            self.get_parameter("ros_publisher_queue").value,
-        )
-
-        self.error_publisher = self.create_publisher(
-            String, "order_valid_error", self.get_parameter("ros_publisher_queue").value
-        )
-        # Set a Will message to be sent by the broker in case of disconnection unexpectedly.
-        will_message = utils.ConnectionMessage(
-            self.manufacturer, self.serial_number, utils.State.CONNECTIONBROKEN
-        )
-        msg_payload = str(will_message)
-        self.mqtt_client.will_set(
-            f"{self.mqtt_topic_prefix}/connection",
-            payload=msg_payload,
-            qos=1,
-            retain=True,
-        )
+            self.error_publisher = self.create_publisher(
+                String,
+                "order_valid_error",
+                self.get_parameter("ros_publisher_queue").value,
+            )
+            # Set a Will message to be sent by the broker in case of disconnection unexpectedly.
+            will_message = utils.ConnectionMessage(
+                self.manufacturer, self.serial_number, utils.State.CONNECTIONBROKEN
+            )
+            msg_payload = str(will_message)
+            self.mqtt_client.will_set(
+                f"{self.mqtt_topic_prefix}/connection",
+                payload=msg_payload,
+                qos=1,
+                retain=True,
+            )
+        except Exception as _e:
+            self.get_logger().error(f"{client_name} Error: str(e)")
 
         max_retries = self.get_parameter("num_retries").value
         retries = 0
@@ -181,6 +210,9 @@ class MqttToRosNode(Node):
         retry_forever = self.get_parameter("retry_forever").value
         while retries < max_retries or retry_forever:
             try:
+                self.get_logger().info(
+                    f'Attempting to connect to {self.get_parameter("mqtt_host_name").value}:{self.get_parameter("mqtt_port").value}'
+                )
                 self.mqtt_client.connect(
                     self.get_parameter("mqtt_host_name").value,
                     self.get_parameter("mqtt_port").value,
