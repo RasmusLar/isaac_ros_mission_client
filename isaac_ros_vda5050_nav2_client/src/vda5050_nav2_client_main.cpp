@@ -20,12 +20,13 @@
 
 #include "isaac_ros_vda5050_nav2_client/vda5050_nav2_client_node.hpp"
 
-int main(int argc, char * argv[])
-{
+int main(int argc, char *argv[]) {
   rclcpp::init(argc, argv);
   rclcpp::executors::SingleThreadedExecutor exec;
   rclcpp::NodeOptions options;
-  auto client_node = std::make_shared<isaac_ros::mission_client::Vda5050toNav2ClientNode>(options);
+  auto client_node =
+      std::make_shared<isaac_ros::mission_client::Vda5050toNav2ClientNode>(
+          options);
   exec.add_node(client_node);
   exec.spin();
   rclcpp::shutdown();
