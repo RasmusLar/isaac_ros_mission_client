@@ -43,6 +43,7 @@
 #include "nav2_msgs/srv/manage_lifecycle_nodes.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
+#include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -153,6 +154,9 @@ private:
   // and appends it's velotity to the status message's velocity that gets
   // published
   void OdometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg);
+  void
+  GetLiftCallback(const std_msgs::msg::Float32MultiArray::ConstSharedPtr msg);
+
   // Goal response callback for NavigateThroughPoses goal message
   void NavPoseGoalResponseCallback(
       const rclcpp_action::ClientGoalHandle<NavThroughPoses>::SharedPtr &goal);
@@ -217,6 +221,8 @@ private:
   // odom topic to get robot velocity
   std::string odom_topic_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr
+      cmd_lift_sub_;
   // Timer to call PublishRobotState periodically
   rclcpp::TimerBase::SharedPtr robot_state_timer_;
   // Timer to publish order_id to JsonInfoGenerator
@@ -231,6 +237,7 @@ private:
   vda5050_msgs::msg::Order::ConstSharedPtr current_order_;
   // Order information for feedback of the mission
   vda5050_msgs::msg::AGVState::SharedPtr agv_state_;
+  float lift_cmd[2];
   // Cancel action
   vda5050_msgs::msg::Action::SharedPtr cancel_action_;
   // Reached current waypoint flag

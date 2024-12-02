@@ -29,6 +29,7 @@
 
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "std_msgs/msg/float32.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/exceptions.h"
@@ -44,6 +45,9 @@ constexpr char kOrderUpdateError[] = "orderUpdateError";
 
 constexpr char kRobotDockAction[] = "dock_robot";
 constexpr char kRobotUndockAction[] = "undock_robot";
+
+constexpr char kPickAction[] = "pick";
+constexpr char kDropAction[] = "drop";
 
 constexpr char kDockType[] = "dock_type";
 constexpr char kDockPose[] = "dock_pose";
@@ -175,6 +179,10 @@ Vda5050toNav2ClientNode::Vda5050toNav2ClientNode(
           odom_topic_, rclcpp::SensorDataQoS(),
           std::bind(&Vda5050toNav2ClientNode::OdometryCallback, this,
                     std::placeholders::_1))),
+      cmd_lift_sub_(create_subscription<std_msgs::msg::Float32MultiArray>(
+          "get_lift", rclcpp::SensorDataQoS(),
+          std::bind(&Vda5050toNav2ClientNode::GetLiftCallback, this,
+                    std::placeholders::_1))),
       robot_state_timer_(create_wall_timer(
           std::chrono::duration<double>(update_feedback_period_),
           std::bind(&Vda5050toNav2ClientNode::StateTimerCallback, this))),
@@ -182,8 +190,9 @@ Vda5050toNav2ClientNode::Vda5050toNav2ClientNode(
           std::chrono::duration<double>(update_order_id_period_),
           std::bind(&Vda5050toNav2ClientNode::OrderIdCallback, this))),
       agv_state_(std::make_shared<vda5050_msgs::msg::AGVState>()),
-      reached_waypoint_(false), pause_order_(false), current_node_(0),
-      next_stop_(0), current_node_action_(0), current_action_state_(0) {
+      lift_cmd{nanf32("0"), nanf32("0")}, reached_waypoint_(false),
+      pause_order_(false), current_node_(0), next_stop_(0),
+      current_node_action_(0), current_action_state_(0) {
   dock_client_ =
       rclcpp_action::create_client<DockAction>(this, kRobotDockAction);
   undock_client_ =
@@ -667,6 +676,76 @@ void Vda5050toNav2ClientNode::Vda5050ActionsHandler(
                 vda5050_action.action_type.c_str());
     return;
   }
+
+  if (vda5050_action.action_type == kPickAction) {
+    RCLCPP_INFO(this->get_logger(), "Got pick action");
+    // For now this is hardcoded into here, this should really publish a
+    // separate topic and each AGV needs to subscribe and handle differently.
+
+    // CMD get lift comes from subscription
+    UpdateActionStatebyId(vda5050_action.action_id, VDAActionState().RUNNING);
+
+    // CMD set lift start
+    auto pickHeight = 0.0L;
+    for (auto &&parameter : vda5050_action.action_parameters) {
+      if (parameter.key == "height") {
+        size_t read;
+        auto const height = ::std::stold(parameter.value, &read);
+        if (read == parameter.value.length()) {
+          pickHeight = height;
+          break;
+        }
+      }
+    }
+
+    auto const cmd_lift_pub =
+        create_publisher<std_msgs::msg::Float32>("cmd_lift", 1);
+    auto const heightEpsilon = 0.01L;
+    auto acceleration = 0.1L;
+    auto const maxSpeed = 0.3f;
+    std_msgs::msg::Float32 speed;
+    speed.data = 0.0;
+    auto prevTime =
+        ::std::chrono::high_resolution_clock::now().time_since_epoch().count() /
+        1000000000.0L;
+    auto newTime = prevTime;
+
+    while (lift_cmd[0] < pickHeight - heightEpsilon ||
+           lift_cmd[0] > pickHeight + heightEpsilon) {
+      auto const distance = pickHeight - lift_cmd[0];
+      auto const deltaT = newTime - prevTime;
+
+      auto const velAcc = ::std::abs(speed.data) + acceleration * deltaT;
+      auto const velDeacc = ::std::sqrt(::std::abs(
+          speed.data * speed.data - 2 * acceleration * ::std::abs(distance)));
+      auto newSpeed = ::std::min(velAcc, velDeacc);
+      if (lift_cmd[0] > pickHeight) {
+        newSpeed *= -1;
+      }
+
+      RCLCPP_INFO(this->get_logger(), "New speed %f", newSpeed);
+      // Limit speed
+      speed.data =
+          ::std::max<float>(-maxSpeed, ::std::min<float>(maxSpeed, newSpeed));
+      cmd_lift_pub->publish(speed);
+      ::std::this_thread::sleep_for(
+          ::std::chrono::duration<uint8_t, ::std::milli>(10));
+      newTime = ::std::chrono::high_resolution_clock::now()
+                    .time_since_epoch()
+                    .count() /
+                1000000000.0L;
+    }
+    speed.data = 0.0;
+    cmd_lift_pub->publish(speed);
+
+    // move forward
+    // CMD set lift start + 0.05 cm
+    // move back
+    // CMD set lift drive height
+
+    UpdateActionStatebyId(vda5050_action.action_id, VDAActionState().FINISHED);
+    return;
+  }
   // Check if action server exists
   if (action_server_map_.count(vda5050_action.action_type) == 0) {
     RCLCPP_ERROR(this->get_logger(), "Action type %s is not supported",
@@ -778,6 +857,13 @@ void Vda5050toNav2ClientNode::OdometryCallback(
   agv_state_->velocity.vx = msg->twist.twist.linear.x;
   agv_state_->velocity.vy = msg->twist.twist.linear.y;
   agv_state_->velocity.omega = msg->twist.twist.angular.z;
+}
+
+void Vda5050toNav2ClientNode::GetLiftCallback(
+    const std_msgs::msg::Float32MultiArray::ConstSharedPtr msg) {
+  // Mutex?
+  lift_cmd[0] = msg->data[0];
+  lift_cmd[1] = msg->data[1];
 }
 
 void Vda5050toNav2ClientNode::InstantActionsCallback(
