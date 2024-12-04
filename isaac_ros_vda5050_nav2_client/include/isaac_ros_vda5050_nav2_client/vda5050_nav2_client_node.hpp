@@ -36,6 +36,8 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
+#include "std_msgs/msg/float32.hpp"
+#include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/empty.hpp"
 #include "std_srvs/srv/set_bool.hpp"
@@ -86,6 +88,8 @@ private:
 	rclcpp_action::Client<NavThroughPoses>::SharedPtr client_ptr_;
 	GoalHandleNavThroughPoses::SharedPtr nav_goal_handle_;
 
+	::std::future<void> pickDropThread;
+
 	rclcpp::Publisher<vda5050_msgs::msg::AGVState>::SharedPtr order_info_pub_;
 	rclcpp::Publisher<std_msgs::msg::String>::SharedPtr order_id_pub_;
 	rclcpp::Subscription<vda5050_msgs::msg::Order>::SharedPtr order_sub_;
@@ -121,6 +125,10 @@ private:
 	// Function that creates the NavigateThroughPoses goal message for Nav2 and
 	// sends that goal asynchronously
 	void NavigateThroughPoses();
+	void ControlLift(
+		rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr cmd_liftPublisher,
+		long double const pickHeight);
+	static void LiftController(Vda5050toNav2ClientNode* self, long double pickHeight);
 	// Vda5050 action handler: check actions in the current node and send requests
 	// to trigger different servers based on the action type
 	void Vda5050ActionsHandler(vda5050_msgs::msg::Action const& vda5050_action);
@@ -144,6 +152,8 @@ private:
 	// and appends it's velotity to the status message's velocity that gets
 	// published
 	void OdometryCallback(nav_msgs::msg::Odometry::ConstSharedPtr const msg);
+	void GetLiftCallback(std_msgs::msg::Float32MultiArray::ConstSharedPtr const msg);
+
 	// Goal response callback for NavigateThroughPoses goal message
 	void NavPoseGoalResponseCallback(
 		rclcpp_action::ClientGoalHandle<NavThroughPoses>::SharedPtr const& goal);
@@ -206,6 +216,7 @@ private:
 	// odom topic to get robot velocity
 	std::string odom_topic_;
 	rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_sub_;
+	rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr cmd_lift_sub_;
 	// Timer to call PublishRobotState periodically
 	rclcpp::TimerBase::SharedPtr robot_state_timer_;
 	// Timer to publish order_id to JsonInfoGenerator
@@ -220,6 +231,7 @@ private:
 	vda5050_msgs::msg::Order::ConstSharedPtr current_order_;
 	// Order information for feedback of the mission
 	vda5050_msgs::msg::AGVState::SharedPtr agv_state_;
+	float lift_cmd[2];
 	// Cancel action
 	vda5050_msgs::msg::Action::SharedPtr cancel_action_;
 	// Reached current waypoint flag
