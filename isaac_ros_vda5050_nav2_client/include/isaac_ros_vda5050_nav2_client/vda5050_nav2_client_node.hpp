@@ -25,6 +25,7 @@
 #define ISAAC_ROS_VDA5050_NAV2_CLIENT__VDA5050_NAV2_CLIENT_NODE_HPP_
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "isaac_ros_vda5050_nav2_client/action/lift_action.hpp"
 #include "isaac_ros_vda5050_nav2_client/action/mission_action.hpp"
 #include "nav2_msgs/action/navigate_through_poses.hpp"
 #include "nav2_msgs/srv/manage_lifecycle_nodes.hpp"
@@ -36,6 +37,8 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
+#include "std_msgs/msg/float32.hpp"
+#include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/empty.hpp"
 #include "std_srvs/srv/set_bool.hpp"
@@ -70,6 +73,8 @@ public:
 	using VDAActionState = vda5050_msgs::msg::ActionState;
 
 	// Add generic action handle
+	using LiftAction			  = isaac_ros_vda5050_nav2_client::action::LiftAction;
+	using GoalHandleLiftAction	  = rclcpp_action::ClientGoalHandle<LiftAction>;
 	using MissionAction			  = isaac_ros_vda5050_nav2_client::action::MissionAction;
 	using GoalHandleMissionAction = rclcpp_action::ClientGoalHandle<MissionAction>;
 	using DockAction			  = opennav_docking_msgs::action::DockRobot;
@@ -85,6 +90,8 @@ public:
 private:
 	rclcpp_action::Client<NavThroughPoses>::SharedPtr client_ptr_;
 	GoalHandleNavThroughPoses::SharedPtr nav_goal_handle_;
+
+	rclcpp_action::Client<LiftAction>::SharedPtr liftActionClient;
 
 	rclcpp::Publisher<vda5050_msgs::msg::AGVState>::SharedPtr order_info_pub_;
 	rclcpp::Publisher<std_msgs::msg::String>::SharedPtr order_id_pub_;
@@ -121,6 +128,8 @@ private:
 	// Function that creates the NavigateThroughPoses goal message for Nav2 and
 	// sends that goal asynchronously
 	void NavigateThroughPoses();
+	LiftAction::Goal createLiftActionGoal(vda5050_msgs::msg::Action const& vda5050_action);
+	void LiftController(vda5050_msgs::msg::Action const& vda5050_action);
 	// Vda5050 action handler: check actions in the current node and send requests
 	// to trigger different servers based on the action type
 	void Vda5050ActionsHandler(vda5050_msgs::msg::Action const& vda5050_action);
@@ -144,6 +153,7 @@ private:
 	// and appends it's velotity to the status message's velocity that gets
 	// published
 	void OdometryCallback(nav_msgs::msg::Odometry::ConstSharedPtr const msg);
+
 	// Goal response callback for NavigateThroughPoses goal message
 	void NavPoseGoalResponseCallback(
 		rclcpp_action::ClientGoalHandle<NavThroughPoses>::SharedPtr const& goal);
@@ -206,6 +216,7 @@ private:
 	// odom topic to get robot velocity
 	std::string odom_topic_;
 	rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_sub_;
+	rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr cmd_lift_sub_;
 	// Timer to call PublishRobotState periodically
 	rclcpp::TimerBase::SharedPtr robot_state_timer_;
 	// Timer to publish order_id to JsonInfoGenerator

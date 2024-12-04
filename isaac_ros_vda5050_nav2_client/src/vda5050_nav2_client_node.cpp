@@ -45,6 +45,9 @@ constexpr char kOrderUpdateError[] = "orderUpdateError";
 constexpr char kRobotDockAction[]	= "dock_robot";
 constexpr char kRobotUndockAction[] = "undock_robot";
 
+constexpr char kPickAction[] = "pick";
+constexpr char kDropAction[] = "drop";
+
 constexpr char kDockType[]					= "dock_type";
 constexpr char kDockPose[]					= "dock_pose";
 constexpr char kTriggerGlobalLocalization[] = "trigger_global_localization";
@@ -127,6 +130,7 @@ void Vda5050toNav2ClientNode::ActionResultCallback(
 Vda5050toNav2ClientNode::Vda5050toNav2ClientNode(rclcpp::NodeOptions const& options)
 : Node("nav2_client_node", options)
 , client_ptr_(rclcpp_action::create_client<NavThroughPoses>(this, "navigate_through_poses"))
+, liftActionClient(rclcpp_action::create_client<LiftAction>(this, "lift_action"))
 , order_info_pub_(create_publisher<vda5050_msgs::msg::AGVState>("agv_state", 1))
 , order_id_pub_(create_publisher<std_msgs::msg::String>("order_id", 1))
 , order_sub_(create_subscription<vda5050_msgs::msg::Order>(
@@ -434,6 +438,160 @@ void Vda5050toNav2ClientNode::NavigateThroughPoses() {
 	client_ptr_->async_send_goal(goal_msg, send_goal_options);
 }
 
+isaac_ros_vda5050_nav2_client::action::LiftAction::Goal
+Vda5050toNav2ClientNode::createLiftActionGoal(vda5050_msgs::msg::Action const& vda5050_action) {
+	auto goal			= LiftAction::Goal();
+	goal.target			= 0.0f;
+	goal.target_epsilon = 0.01f;
+	goal.max_speed		= 0.4f;
+	goal.acceleration	= 0.15f;
+	goal.deadband_speed = 0.01f;
+	auto parseNumber	= [](::std::string const& numberString, float const defaultValue) {
+		   size_t read;
+		   auto const height = ::std::stof(numberString, &read);
+		   if (read == numberString.length()) {
+			   return height;
+		   }
+		   return defaultValue;
+	};
+
+	for (auto&& parameter : vda5050_action.action_parameters) {
+		if (parameter.key == "height") {
+			goal.target = parseNumber(parameter.value, goal.target);
+		} else if (parameter.key == "height_epsilon") {
+			goal.target_epsilon = parseNumber(parameter.value, goal.target_epsilon);
+		} else if (parameter.key == "max_speed") {
+			goal.max_speed = parseNumber(parameter.value, goal.max_speed);
+		} else if (parameter.key == "acceleration") {
+			goal.acceleration = parseNumber(parameter.value, goal.acceleration);
+		} else if (parameter.key == "deadband_speed") {
+			goal.deadband_speed = parseNumber(parameter.value, goal.deadband_speed);
+		}
+	}
+	return goal;
+}
+
+void Vda5050toNav2ClientNode::LiftController(vda5050_msgs::msg::Action const& vda5050_action) {
+	// RCLCPP_INFO(this->get_logger(), "Starting %s action", vda5050_action.action_type.c_str());
+
+	// auto const action_state_idx = current_action_state_;
+	// auto send_goal_options		= rclcpp_action::Client<LiftAction>::SendGoalOptions();
+	// send_goal_options.goal_response_callback
+	// 	= [this, action_state_idx, vda5050_action](
+	// 		  rclcpp_action::ClientGoalHandle<LiftAction>::SharedPtr const& goal) {
+	// 		  ActionResponseCallback<LiftAction>(goal, action_state_idx);
+	// 	  };
+	// send_goal_options.result_callback = [this, action_state_idx, vda5050_action](
+	// 										GoalHandleLiftAction::WrappedResult const& result) {
+	// 	// Move forklift distance in from previous position. Needs to be done
+	// 	// in parts to align, or use dock instead? Not sure.
+	// 	auto startPose = geometry_msgs::msg::PoseStamped();
+
+	// 	startPose.pose.position.x = current_order_->nodes[current_node_].node_position.x;
+	// 	startPose.pose.position.y = current_order_->nodes[current_node_].node_position.y;
+	// 	startPose.pose.position.z = 0.0;
+	// 	tf2::Quaternion tfQuaternion;
+	// 	auto currentAngle = current_order_->nodes[current_node_].node_position.theta;
+	// 	tfQuaternion.setEuler(currentAngle, 0, 0);
+	// 	startPose.pose.orientation.w = tfQuaternion.getW();
+	// 	startPose.pose.orientation.x = tfQuaternion.getX();
+	// 	startPose.pose.orientation.y = tfQuaternion.getY();
+	// 	startPose.pose.orientation.z = tfQuaternion.getZ();
+	// 	startPose.header.frame_id	 = "map";
+
+	// 	// Instead of bothering with TF transforms, this is a simple geometric
+	// 	// calc:
+	// 	auto forkLength = 1.23456789; // ~1.23 :)
+
+	// 	auto moveToPose = geometry_msgs::msg::PoseStamped();
+
+	// 	moveToPose.pose.position.x
+	// 		= startPose.pose.position.x - ::std::cos(currentAngle) * forkLength;
+	// 	moveToPose.pose.position.y
+	// 		= startPose.pose.position.y - ::std::sin(currentAngle) * forkLength;
+	// 	moveToPose.pose.position.z	  = 0.0;
+	// 	moveToPose.pose.orientation.w = tfQuaternion.getW();
+	// 	moveToPose.pose.orientation.x = tfQuaternion.getX();
+	// 	moveToPose.pose.orientation.y = tfQuaternion.getY();
+	// 	moveToPose.pose.orientation.z = tfQuaternion.getZ();
+	// 	moveToPose.header.frame_id	  = "map";
+
+	// 	auto goal_msg = NavThroughPoses::Goal();
+
+	// 	moveToPose.header.stamp = rclcpp::Clock().now();
+	// 	goal_msg.poses.push_back(moveToPose);
+	// 	auto send_goal_options = rclcpp_action::Client<NavThroughPoses>::SendGoalOptions();
+	// 	// send_goal_options.goal_response_callback = ::std::bind(
+	// 	// 	&Vda5050toNav2ClientNode::NavPoseGoalResponseCallback, this, ::std::placeholders::_1);
+
+	// 	send_goal_options.result_callback
+	// 		= [this, startPose](GoalHandleNavThroughPoses::WrappedResult const& result) {
+	// 			  nav_goal_handle_.reset();
+	// 			  if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+	// 				  // CMD set lift start + 0.05 m
+
+	// 				  auto next = [this, startPose]() {
+	// 					  //   ControlLift(cmd_liftPublisher, pickHeight + 0.1);
+	// 					  // move back
+	// 					  auto goal_msg = NavThroughPoses::Goal();
+
+	// 					  auto modifiableStartPose = geometry_msgs::msg::PoseStamped(startPose);
+	// 					  modifiableStartPose.header.stamp = rclcpp::Clock().now();
+
+	// 					  goal_msg.poses.push_back(modifiableStartPose);
+	// 					  // RCLCPP_INFO(get_logger(), "Sending goal for (x: %f, y: %f, quatZ:
+	// 					  // %f)",
+	// 					  //             startPose.pose.position.x, startPose.pose.position.y,
+	// 					  //             startPose.pose.orientation.z);
+
+	// 					  auto send_goal_options
+	// 						  = rclcpp_action::Client<NavThroughPoses>::SendGoalOptions();
+	// 					  send_goal_options.goal_response_callback = ::std::bind(
+	// 						  &Vda5050toNav2ClientNode::NavPoseGoalResponseCallback,
+	// 						  this,
+	// 						  ::std::placeholders::_1);
+	// 					  // send_goal_options.feedback_callback = ::std::bind(
+	// 					  // 	&Vda5050toNav2ClientNode::NavPoseFeedbackCallback,
+	// 					  // 	this,
+	// 					  // 	::std::placeholders::_1,
+	// 					  // 	::std::placeholders::_2);
+
+	// 					  send_goal_options.result_callback
+	// 						  = [this](GoalHandleNavThroughPoses::WrappedResult const& result) {
+	// 								nav_goal_handle_.reset();
+	// 								if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+	// 								} else {
+	// 									UpdateActionState(
+	// 										current_action_state_,
+	// 										VDAActionState().FAILED,
+	// 										"Failed to navigate out.");
+	// 								}
+	// 							};
+	// 					  client_ptr_->async_send_goal(goal_msg, send_goal_options);
+	// 				  };
+	// 			  } else {
+	// 				  UpdateActionState(
+	// 					  current_action_state_, VDAActionState().FAILED, "Failed to navigate in.");
+	// 			  }
+	// 		  };
+
+	// 	ActionResultCallback<GoalHandleLiftAction::WrappedResult>(
+	// 		result, action_state_idx, result.result->result_description);
+	// };
+
+	// auto goal_msg = createLiftActionGoal(vda5050_action);
+	// if (vda5050_action.action_type == kDropAction) {
+	// 	goal_msg.target += 0.05;
+	// }
+	// RCLCPP_INFO(
+	// 	get_logger(),
+	// 	"Sending %s lift for %f",
+	// 	vda5050_action.action_type.c_str(),
+	// 	goal_msg.target);
+
+	// liftActionClient->async_send_goal(goal_msg, send_goal_options);
+}
+
 void Vda5050toNav2ClientNode::Vda5050ActionsHandler(
 	vda5050_msgs::msg::Action const& vda5050_action) {
 	// Handle action that does not need a server
@@ -617,6 +775,33 @@ void Vda5050toNav2ClientNode::Vda5050ActionsHandler(
 		RCLCPP_INFO(this->get_logger(), "Send %s request", vda5050_action.action_type.c_str());
 		return;
 	}
+	if (vda5050_action.action_type == "lift") {
+		auto const action_state_idx = current_action_state_;
+		auto send_goal_options		= rclcpp_action::Client<LiftAction>::SendGoalOptions();
+		send_goal_options.goal_response_callback
+			= [this, action_state_idx, vda5050_action](
+				  rclcpp_action::ClientGoalHandle<LiftAction>::SharedPtr const& goal) {
+				  ActionResponseCallback<LiftAction>(goal, action_state_idx);
+			  };
+		send_goal_options.result_callback = [this, action_state_idx, vda5050_action](
+												GoalHandleLiftAction::WrappedResult const& result) {
+			ActionResultCallback<GoalHandleLiftAction::WrappedResult>(
+				result, action_state_idx, result.result->result_description);
+		};
+		auto goal_msg = createLiftActionGoal(vda5050_action);
+		RCLCPP_INFO(get_logger(), "Sending lift for %f", goal_msg.target);
+		liftActionClient->async_send_goal(goal_msg, send_goal_options);
+		return;
+	}
+	// if (vda5050_action.action_type == kPickAction) {
+	// 	RCLCPP_INFO(this->get_logger(), "Got pick action");
+	// 	// For now this is hardcoded into here, this should really publish a
+	// 	// separate topic and each AGV needs to subscribe and handle differently.
+
+	// 	// Store in a member var to keep scope
+	// 	LiftController(vda5050_action);
+	// 	return;
+	// }
 	// Check if action server exists
 	if (action_server_map_.count(vda5050_action.action_type) == 0) {
 		RCLCPP_ERROR(
@@ -805,10 +990,11 @@ void Vda5050toNav2ClientNode::CancelOrder() {
 	if (!RunningOrder()) {
 		RCLCPP_ERROR(
 			this->get_logger(),
-			"cancelOrder action request failed. There is no active order running.");
+			"cancelOrder action request failed. "
+			"There is no active order running.");
 		UpdateActionStatebyId(cancel_action_->action_id, VDAActionState().FAILED);
-		// The AGV must report a “noOrderToCancel” error with the errorLevel set to
-		// warning. The actionId of the instantAction must be passed as an
+		// The AGV must report a “noOrderToCancel” error with the errorLevel set
+		// to warning. The actionId of the instantAction must be passed as an
 		// errorReference.
 		auto error = vda5050_msgs::msg::Error();
 		error	   = CreateError(
@@ -860,7 +1046,8 @@ void Vda5050toNav2ClientNode::UpdateActionStatebyId(
 	if (it == agv_state_->action_states.end()) {
 		RCLCPP_ERROR(
 			this->get_logger(),
-			"Error while processing action state. Couldn't find action with id: %s",
+			"Error while processing action state. Couldn't find action "
+			"with id: %s",
 			action_id.c_str());
 		auto error = vda5050_msgs::msg::Error();
 		error	   = CreateError(
