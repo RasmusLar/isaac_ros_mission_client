@@ -438,6 +438,15 @@ void Vda5050toNav2ClientNode::NavigateThroughPoses() {
 	client_ptr_->async_send_goal(goal_msg, send_goal_options);
 }
 
+float parseNumber(::std::string const& numberString, float const defaultValue) {
+	size_t read;
+	auto const height = ::std::stof(numberString, &read);
+	if (read == numberString.length()) {
+		return height;
+	}
+	return defaultValue;
+}
+
 isaac_ros_vda5050_nav2_client::action::LiftAction::Goal
 Vda5050toNav2ClientNode::createLiftActionGoal(vda5050_msgs::msg::Action const& vda5050_action) {
 	auto goal			= LiftAction::Goal();
@@ -446,14 +455,6 @@ Vda5050toNav2ClientNode::createLiftActionGoal(vda5050_msgs::msg::Action const& v
 	goal.max_speed		= 0.4f;
 	goal.acceleration	= 0.15f;
 	goal.deadband_speed = 0.01f;
-	auto parseNumber	= [](::std::string const& numberString, float const defaultValue) {
-		   size_t read;
-		   auto const height = ::std::stof(numberString, &read);
-		   if (read == numberString.length()) {
-			   return height;
-		   }
-		   return defaultValue;
-	};
 
 	for (auto&& parameter : vda5050_action.action_parameters) {
 		if (parameter.key == "height") {
@@ -472,124 +473,195 @@ Vda5050toNav2ClientNode::createLiftActionGoal(vda5050_msgs::msg::Action const& v
 }
 
 void Vda5050toNav2ClientNode::LiftController(vda5050_msgs::msg::Action const& vda5050_action) {
-	// RCLCPP_INFO(this->get_logger(), "Starting %s action", vda5050_action.action_type.c_str());
+	RCLCPP_INFO(this->get_logger(), "Starting %s action", vda5050_action.action_type.c_str());
 
-	// auto const action_state_idx = current_action_state_;
-	// auto send_goal_options		= rclcpp_action::Client<LiftAction>::SendGoalOptions();
-	// send_goal_options.goal_response_callback
-	// 	= [this, action_state_idx, vda5050_action](
-	// 		  rclcpp_action::ClientGoalHandle<LiftAction>::SharedPtr const& goal) {
-	// 		  ActionResponseCallback<LiftAction>(goal, action_state_idx);
-	// 	  };
-	// send_goal_options.result_callback = [this, action_state_idx, vda5050_action](
-	// 										GoalHandleLiftAction::WrappedResult const& result) {
-	// 	// Move forklift distance in from previous position. Needs to be done
-	// 	// in parts to align, or use dock instead? Not sure.
-	// 	auto startPose = geometry_msgs::msg::PoseStamped();
+	auto const action_state_idx = current_action_state_;
+	auto send_goal_options		= rclcpp_action::Client<LiftAction>::SendGoalOptions();
 
-	// 	startPose.pose.position.x = current_order_->nodes[current_node_].node_position.x;
-	// 	startPose.pose.position.y = current_order_->nodes[current_node_].node_position.y;
-	// 	startPose.pose.position.z = 0.0;
-	// 	tf2::Quaternion tfQuaternion;
-	// 	auto currentAngle = current_order_->nodes[current_node_].node_position.theta;
-	// 	tfQuaternion.setEuler(currentAngle, 0, 0);
-	// 	startPose.pose.orientation.w = tfQuaternion.getW();
-	// 	startPose.pose.orientation.x = tfQuaternion.getX();
-	// 	startPose.pose.orientation.y = tfQuaternion.getY();
-	// 	startPose.pose.orientation.z = tfQuaternion.getZ();
-	// 	startPose.header.frame_id	 = "map";
+	auto goal_msg = createLiftActionGoal(vda5050_action);
+	if (vda5050_action.action_type == kDropAction) {
+		goal_msg.target += 0.05;
+	}
 
-	// 	// Instead of bothering with TF transforms, this is a simple geometric
-	// 	// calc:
-	// 	auto forkLength = 1.23456789; // ~1.23 :)
+	send_goal_options.goal_response_callback
+		= [this, action_state_idx, vda5050_action](
+			  rclcpp_action::ClientGoalHandle<LiftAction>::SharedPtr const& goal) {
+			  ActionResponseCallback<LiftAction>(goal, action_state_idx);
+		  };
+	send_goal_options.result_callback = [this, action_state_idx, vda5050_action](
+											GoalHandleLiftAction::WrappedResult const& result) {
+		if (result.code != rclcpp_action::ResultCode::SUCCEEDED) {
+			// Fail.
+			ActionResultCallback<GoalHandleLiftAction::WrappedResult>(
+				result, action_state_idx, result.result->result_description);
+			return;
+		}
+		// Move forklift distance in from previous position. Needs to be done
+		// in parts to align, or use dock instead? Not sure.
+		auto startPose = geometry_msgs::msg::PoseStamped();
+		double currentAngle{};
+		tf2::Quaternion tfQuaternion;
+		startPose.pose.position.z = 0.0;
+		if (current_order_->nodes.size() > current_node_) {
+			startPose.pose.position.x = current_order_->nodes[current_node_].node_position.x;
+			startPose.pose.position.y = current_order_->nodes[current_node_].node_position.y;
+			currentAngle			  = current_order_->nodes[current_node_].node_position.theta;
+		} else {
+			startPose.pose.position.x = agv_state_->agv_position.x;
+			startPose.pose.position.y = agv_state_->agv_position.y;
+			currentAngle			  = agv_state_->agv_position.theta;
+		}
+		tfQuaternion.setEuler(currentAngle, 0, 0);
+		startPose.pose.orientation.w = tfQuaternion.getW();
+		startPose.pose.orientation.x = tfQuaternion.getX();
+		startPose.pose.orientation.y = tfQuaternion.getY();
+		startPose.pose.orientation.z = tfQuaternion.getZ();
+		startPose.header.frame_id	 = "map";
 
-	// 	auto moveToPose = geometry_msgs::msg::PoseStamped();
+		// Instead of bothering with TF transforms, this is a simple geometric
+		// calc:
+		auto forkLength = 1.23456789; // ~1.23 :)
+		auto depthParam = ::std::find_if(
+			vda5050_action.action_parameters.begin(),
+			vda5050_action.action_parameters.end(),
+			[](vda5050_msgs::msg::ActionParameter const& param) { return (param.key == "depth"); });
+		if (depthParam != vda5050_action.action_parameters.end()) {
+			forkLength = parseNumber(depthParam->value, forkLength);
+		}
+		auto moveToPose = geometry_msgs::msg::PoseStamped();
 
-	// 	moveToPose.pose.position.x
-	// 		= startPose.pose.position.x - ::std::cos(currentAngle) * forkLength;
-	// 	moveToPose.pose.position.y
-	// 		= startPose.pose.position.y - ::std::sin(currentAngle) * forkLength;
-	// 	moveToPose.pose.position.z	  = 0.0;
-	// 	moveToPose.pose.orientation.w = tfQuaternion.getW();
-	// 	moveToPose.pose.orientation.x = tfQuaternion.getX();
-	// 	moveToPose.pose.orientation.y = tfQuaternion.getY();
-	// 	moveToPose.pose.orientation.z = tfQuaternion.getZ();
-	// 	moveToPose.header.frame_id	  = "map";
+		moveToPose.pose.position.x
+			= startPose.pose.position.x - ::std::cos(currentAngle) * forkLength;
+		moveToPose.pose.position.y
+			= startPose.pose.position.y - ::std::sin(currentAngle) * forkLength;
+		moveToPose.pose.position.z	  = 0.0;
+		moveToPose.pose.orientation.w = tfQuaternion.getW();
+		moveToPose.pose.orientation.x = tfQuaternion.getX();
+		moveToPose.pose.orientation.y = tfQuaternion.getY();
+		moveToPose.pose.orientation.z = tfQuaternion.getZ();
+		moveToPose.header.frame_id	  = "map";
 
-	// 	auto goal_msg = NavThroughPoses::Goal();
+		auto goal_msg = NavThroughPoses::Goal();
 
-	// 	moveToPose.header.stamp = rclcpp::Clock().now();
-	// 	goal_msg.poses.push_back(moveToPose);
-	// 	auto send_goal_options = rclcpp_action::Client<NavThroughPoses>::SendGoalOptions();
-	// 	// send_goal_options.goal_response_callback = ::std::bind(
-	// 	// 	&Vda5050toNav2ClientNode::NavPoseGoalResponseCallback, this, ::std::placeholders::_1);
+		moveToPose.header.stamp = rclcpp::Clock().now();
+		goal_msg.poses.push_back(moveToPose);
+		auto send_goal_options = rclcpp_action::Client<NavThroughPoses>::SendGoalOptions();
+		send_goal_options.goal_response_callback
+			= [this, action_state_idx](
+				  rclcpp_action::ClientGoalHandle<NavThroughPoses>::SharedPtr const& goal) {
+				  if (!goal) {
+					  nav_goal_handle_.reset();
+					  ActionResponseCallback<NavThroughPoses>(goal, action_state_idx);
+				  }
+			  };
 
-	// 	send_goal_options.result_callback
-	// 		= [this, startPose](GoalHandleNavThroughPoses::WrappedResult const& result) {
-	// 			  nav_goal_handle_.reset();
-	// 			  if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
-	// 				  // CMD set lift start + 0.05 m
+		send_goal_options.result_callback = [this, startPose, action_state_idx, vda5050_action](
+												GoalHandleNavThroughPoses::WrappedResult const&
+													result) {
+			nav_goal_handle_.reset();
+			if (result.code != rclcpp_action::ResultCode::SUCCEEDED) {
+				// Fail.
+				UpdateActionState(action_state_idx, VDAActionState().FAILED);
+				return;
+			}
 
-	// 				  auto next = [this, startPose]() {
-	// 					  //   ControlLift(cmd_liftPublisher, pickHeight + 0.1);
-	// 					  // move back
-	// 					  auto goal_msg = NavThroughPoses::Goal();
+			// CMD set lift depending on drop or pick
+			auto goal_msg = createLiftActionGoal(vda5050_action);
+			if (vda5050_action.action_type == kPickAction) {
+				goal_msg.target += 0.05;
+			}
+			auto send_goal_options = rclcpp_action::Client<LiftAction>::SendGoalOptions();
+			send_goal_options.goal_response_callback
+				= [this, action_state_idx](
+					  rclcpp_action::ClientGoalHandle<LiftAction>::SharedPtr const& goal) {
+					  if (!goal) {
+						  ActionResponseCallback<LiftAction>(goal, action_state_idx);
+					  }
+				  };
+			send_goal_options.result_callback = [this, startPose, action_state_idx, vda5050_action](
+													GoalHandleLiftAction::WrappedResult const&
+														result) {
+				if (result.code != rclcpp_action::ResultCode::SUCCEEDED) {
+					// Fail.
+					ActionResultCallback<GoalHandleLiftAction::WrappedResult>(
+						result, action_state_idx, result.result->result_description);
+					return;
+				}
 
-	// 					  auto modifiableStartPose = geometry_msgs::msg::PoseStamped(startPose);
-	// 					  modifiableStartPose.header.stamp = rclcpp::Clock().now();
+				// move back
+				auto goal_msg = NavThroughPoses::Goal();
 
-	// 					  goal_msg.poses.push_back(modifiableStartPose);
-	// 					  // RCLCPP_INFO(get_logger(), "Sending goal for (x: %f, y: %f, quatZ:
-	// 					  // %f)",
-	// 					  //             startPose.pose.position.x, startPose.pose.position.y,
-	// 					  //             startPose.pose.orientation.z);
+				auto modifiableStartPose		 = geometry_msgs::msg::PoseStamped(startPose);
+				modifiableStartPose.header.stamp = rclcpp::Clock().now();
 
-	// 					  auto send_goal_options
-	// 						  = rclcpp_action::Client<NavThroughPoses>::SendGoalOptions();
-	// 					  send_goal_options.goal_response_callback = ::std::bind(
-	// 						  &Vda5050toNav2ClientNode::NavPoseGoalResponseCallback,
-	// 						  this,
-	// 						  ::std::placeholders::_1);
-	// 					  // send_goal_options.feedback_callback = ::std::bind(
-	// 					  // 	&Vda5050toNav2ClientNode::NavPoseFeedbackCallback,
-	// 					  // 	this,
-	// 					  // 	::std::placeholders::_1,
-	// 					  // 	::std::placeholders::_2);
+				goal_msg.poses.push_back(modifiableStartPose);
+				// RCLCPP_INFO(get_logger(), "Sending goal for (x: %f, y: %f, quatZ:
+				// %f)",
+				//             startPose.pose.position.x, startPose.pose.position.y,
+				//             startPose.pose.orientation.z);
 
-	// 					  send_goal_options.result_callback
-	// 						  = [this](GoalHandleNavThroughPoses::WrappedResult const& result) {
-	// 								nav_goal_handle_.reset();
-	// 								if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
-	// 								} else {
-	// 									UpdateActionState(
-	// 										current_action_state_,
-	// 										VDAActionState().FAILED,
-	// 										"Failed to navigate out.");
-	// 								}
-	// 							};
-	// 					  client_ptr_->async_send_goal(goal_msg, send_goal_options);
-	// 				  };
-	// 			  } else {
-	// 				  UpdateActionState(
-	// 					  current_action_state_, VDAActionState().FAILED, "Failed to navigate in.");
-	// 			  }
-	// 		  };
+				auto send_goal_options = rclcpp_action::Client<NavThroughPoses>::SendGoalOptions();
+				send_goal_options.goal_response_callback
+					= [this, action_state_idx](
+						  rclcpp_action::ClientGoalHandle<NavThroughPoses>::SharedPtr const& goal) {
+						  if (!goal) {
+							  nav_goal_handle_.reset();
+							  ActionResponseCallback<NavThroughPoses>(goal, action_state_idx);
+						  }
+					  };
 
-	// 	ActionResultCallback<GoalHandleLiftAction::WrappedResult>(
-	// 		result, action_state_idx, result.result->result_description);
-	// };
+				send_goal_options.result_callback
+					= [this, action_state_idx, vda5050_action](
+						  GoalHandleNavThroughPoses::WrappedResult const& result) {
+						  nav_goal_handle_.reset();
+						  if (result.code != rclcpp_action::ResultCode::SUCCEEDED) {
+							  // Fail.
+							  UpdateActionState(action_state_idx, VDAActionState().FAILED);
+							  return;
+						  }
+						  auto goal_msg	  = createLiftActionGoal(vda5050_action);
+						  goal_msg.target = 0.0; // Should this also be input?
 
-	// auto goal_msg = createLiftActionGoal(vda5050_action);
-	// if (vda5050_action.action_type == kDropAction) {
-	// 	goal_msg.target += 0.05;
-	// }
+						  auto send_goal_options
+							  = rclcpp_action::Client<LiftAction>::SendGoalOptions();
+						  send_goal_options.goal_response_callback
+							  = [this, action_state_idx](
+									rclcpp_action::ClientGoalHandle<LiftAction>::SharedPtr const&
+										goal) {
+									if (!goal) {
+										ActionResponseCallback<LiftAction>(goal, action_state_idx);
+									}
+								};
+						  send_goal_options.result_callback =
+							  [this, action_state_idx](
+								  GoalHandleLiftAction::WrappedResult const& result) {
+								  ActionResultCallback<GoalHandleLiftAction::WrappedResult>(
+									  result, action_state_idx, result.result->result_description);
+							  };
+
+						  liftActionClient->async_send_goal(goal_msg, send_goal_options);
+					  };
+				client_ptr_->async_send_goal(goal_msg, send_goal_options);
+			};
+
+			//   RCLCPP_INFO(
+			// 	  get_logger(),
+			// 	  "Sending %s lift for %f",
+			// 	  vda5050_action.action_type.c_str(),
+			// 	  goal_msg.target);
+
+			liftActionClient->async_send_goal(goal_msg, send_goal_options);
+		};
+		client_ptr_->async_send_goal(goal_msg, send_goal_options);
+	};
+
 	// RCLCPP_INFO(
 	// 	get_logger(),
 	// 	"Sending %s lift for %f",
 	// 	vda5050_action.action_type.c_str(),
 	// 	goal_msg.target);
 
-	// liftActionClient->async_send_goal(goal_msg, send_goal_options);
+	liftActionClient->async_send_goal(goal_msg, send_goal_options);
 }
 
 void Vda5050toNav2ClientNode::Vda5050ActionsHandler(
@@ -793,15 +865,10 @@ void Vda5050toNav2ClientNode::Vda5050ActionsHandler(
 		liftActionClient->async_send_goal(goal_msg, send_goal_options);
 		return;
 	}
-	// if (vda5050_action.action_type == kPickAction) {
-	// 	RCLCPP_INFO(this->get_logger(), "Got pick action");
-	// 	// For now this is hardcoded into here, this should really publish a
-	// 	// separate topic and each AGV needs to subscribe and handle differently.
-
-	// 	// Store in a member var to keep scope
-	// 	LiftController(vda5050_action);
-	// 	return;
-	// }
+	if (vda5050_action.action_type == kPickAction || vda5050_action.action_type == kDropAction) {
+		LiftController(vda5050_action);
+		return;
+	}
 	// Check if action server exists
 	if (action_server_map_.count(vda5050_action.action_type) == 0) {
 		RCLCPP_ERROR(

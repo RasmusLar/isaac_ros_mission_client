@@ -33,8 +33,8 @@ private:
 	rclcpp_action::Server<Lift>::SharedPtr action_server_;
 	rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr liftCommandPublisher;
 
-	rclcpp_action::GoalResponse
-	handle_goal(rclcpp_action::GoalUUID const& /*uuid*/, std::shared_ptr<Lift::Goal const> goal) {
+	rclcpp_action::GoalResponse handle_goal(
+		rclcpp_action::GoalUUID const& /*uuid*/, std::shared_ptr<Lift::Goal const> /*goal*/) {
 		RCLCPP_INFO(this->get_logger(), "Received goal request");
 		return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 	}
