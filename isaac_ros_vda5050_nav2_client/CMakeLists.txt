@@ -50,8 +50,12 @@ find_package(nav2_msgs)
 find_package(opennav_docking_msgs)
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
-rosidl_generate_interfaces(${PROJECT_NAME}
+set(action_files
+  "action/LiftAction.action"
   "action/MissionAction.action"
+)
+rosidl_generate_interfaces(${PROJECT_NAME}
+  ${action_files}
   DEPENDENCIES geometry_msgs
 )
 ament_auto_add_library(vda5050_nav2_client_node SHARED
