@@ -26,6 +26,12 @@ def generate_launch_description():
     """Generate launch description for VDA5050 Nav2 Client node."""
     launch_args = [
         DeclareLaunchArgument(
+            "log_level",
+            default_value="info",
+            description="Namespace for ROS nodes in this launch script",
+            choices=["debug", "info", "warn", "error"],
+        ),
+        DeclareLaunchArgument(
             "namespace",
             default_value="",
             description="Namespace for ROS nodes in this launch script",
@@ -142,8 +148,44 @@ def generate_launch_description():
             default_value="/chassis/battery_state",
             description="The topic that publishes battery state message.",
         ),
+        DeclareLaunchArgument(
+            "wheel_base",
+            default_value="",
+            description="Wheel base of the AGV, Ackermann geometry, if not defined, it will not be used.",
+        ),
+        DeclareLaunchArgument(
+            "track_width",
+            default_value="",
+            description="Track width of the AGV, Ackermann geometry, if not defined, it will not be used.",
+        ),
+        DeclareLaunchArgument(
+            "turning_wheel_radius",
+            default_value="",
+            description="Turning wheel radius of the AGV, Ackermann geometry, if not defined, it will not be used.",
+        ),
+        DeclareLaunchArgument(
+            "max_wheel_velocity",
+            default_value="3.141592",
+            description="Maximum wheel velocity of the AGV in rad/s, Ackermann geometry",
+        ),
+        DeclareLaunchArgument(
+            "max_wheel_rotation_angle",
+            default_value="3.141592",
+            description="Maximum wheel rotation angle of the AGV in rad, Ackermann geometry",
+        ),
+        DeclareLaunchArgument(
+            "front_left_wheel_name",
+            default_value="frontLeft",
+            description="Name of the front left wheel of the AGV",
+        ),
+        DeclareLaunchArgument(
+            "front_right_wheel_name",
+            default_value="frontReft",
+            description="Name of the front right wheel of the AGV",
+        ),
     ]
 
+    log_level = LaunchConfiguration("log_level")
     namespace = LaunchConfiguration("namespace")
     mqtt_host_name = LaunchConfiguration("mqtt_host_name")
     mqtt_transport = LaunchConfiguration("mqtt_transport")
@@ -168,14 +210,29 @@ def generate_launch_description():
     docking_server_enabled = LaunchConfiguration("docking_server_enabled")
     odom_topic = LaunchConfiguration("odom_topic")
     battery_state_topic = LaunchConfiguration("battery_state_topic")
+    wheel_base = LaunchConfiguration("wheel_base")
+    track_width = LaunchConfiguration("track_width")
+    turning_wheel_radius = LaunchConfiguration("turning_wheel_radius")
+    max_wheel_velocity = LaunchConfiguration("max_wheel_velocity")
+    max_wheel_rotation_angle = LaunchConfiguration("max_wheel_rotation_angle")
+    front_left_wheel_name = LaunchConfiguration("front_left_wheel_name")
+    front_right_wheel_name = LaunchConfiguration("front_right_wheel_name")
 
     client_node = Node(
         namespace=namespace,
         name="nav2_client_node",
         package="isaac_ros_vda5050_nav2_client",
         executable="vda5050_nav2_client",
+        arguments=["--ros-args", "--log-level", log_level],
         parameters=[
             {
+                "wheel_base": wheel_base,
+                "track_width": track_width,
+                "turning_wheel_radius": turning_wheel_radius,
+                "max_wheel_velocity": max_wheel_velocity,
+                "max_wheel_rotation_angle": max_wheel_rotation_angle,
+                "front_left_name": front_left_wheel_name,
+                "front_right_name": front_right_wheel_name,
                 "update_feedback_period": 1.0,
                 "verbose": False,
                 "action_server_names": ["recorder"],

@@ -15,6 +15,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "isaac_ros_vda5050_nav2_client/ackermann_geometry_bridge_node.hpp"
 #include "isaac_ros_vda5050_nav2_client/lift_node.hpp"
 #include "isaac_ros_vda5050_nav2_client/vda5050_nav2_client_node.hpp"
 
@@ -31,6 +32,8 @@ int main(int argc, char* argv[]) {
 	exec.add_node(client_node);
 	auto lift_node = std::make_shared<LiftActionServer>();
 	exec.add_node(lift_node);
+	auto ackermann_node = std::make_shared<AckermannGeometryBridge>(options);
+	exec.add_node(ackermann_node);
 	exec.spin();
 	rclcpp::shutdown();
 	return 0;
